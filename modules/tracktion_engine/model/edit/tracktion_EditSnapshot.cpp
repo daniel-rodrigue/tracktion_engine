@@ -224,7 +224,7 @@ void EditSnapshot::refresh()
         return;
 
     name = pi ? pi->getName() : sourceFile.getFileNameWithoutExtension();
-    setState (newState, TimeDuration::fromSeconds (pi->getLength()));
+    setState (newState, TimeDuration::fromSeconds (pi != nullptr ? pi->getLength() : 0.0));
     refreshFromState();
 }
 

@@ -2363,8 +2363,21 @@ AudioFileInfo AudioClipBase::getWaveInfo()
     // this is of course a massive hack because it assumes that the rendered file will have the same sample rate etc.
 
     if (needsRender())
+    {
         if (auto sourceItem = sourceFileReference.getSourceProjectItem())
             return AudioFile (edit.engine, sourceItem->getSourceFile()).getInfo();
+
+        // modusMIX: a clip whose source reference is a plain file path has no
+        // ProjectItem, so the line above found nothing and this fell through to
+        // getAudioFile() -- which, once updateSourceFile() has pointed the clip at the
+        // not-yet-rendered destination, is a file that does not exist. The zero
+        // AudioFileInfo that came back gave AudioSegmentList a zero sample rate and a
+        // zero out-marker, so every render of a source (warp, reverse, clip effects)
+        // produced a correctly-sized file of pure silence. The original file is what
+        // the render actually reads, so describe that.
+        if (const auto original = getOriginalFile(); original.existsAsFile())
+            return AudioFile (edit.engine, original).getInfo();
+    }
 
     return getAudioFile().getInfo();
 }

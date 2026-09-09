@@ -274,6 +274,7 @@ public:
             r.reset();
 
         hasBeenReset = true;
+        sourceFrameCarry = 0.0;
         timeSourceIsAheadDueToLatency = {};
     }
 
@@ -290,6 +291,9 @@ public:
 
     void setPosition (TimePosition t) override
     {
+        // The source is being placed absolutely, so whatever fraction of a frame
+        // the last block left over no longer describes anything.
+        sourceFrameCarry = 0.0;
         source->setPosition (t + timeSourceIsAheadDueToLatency);
     }
 
@@ -321,10 +325,35 @@ public:
 
         const auto ratio = sampleRatio * speedRatio;
         const auto numDestFrames = destBuffer.getNumFrames();
-        const int numSourceFramesToRead = static_cast<int> ((numDestFrames * ratio) + 0.5);
+
+        // How many source frames this block needs, carrying the fraction a whole
+        // number of frames leaves behind.
+        //
+        // Without the carry each call rounds on its own, and for a given ratio and
+        // block size it rounds the same way every time -- so the reader walks the
+        // source at the ROUNDED rate rather than the real one. Nothing upstream
+        // notices: the time-stretcher above only re-seeks when its own model of the
+        // read position drifts, and that model is a copy of the position being asked
+        // for, not of where the source actually got to. The two ideal numbers always
+        // agree, so the real error is never corrected and accumulates without bound.
+        //
+        // It only bites when the ratio isn't a whole number, i.e. when the output
+        // rate is not the file's rate (or a multiple of it): 44.1 kHz material played
+        // at 48 kHz runs about two milliseconds per second fast, which is a clip
+        // visibly ahead of the beat grid within a minute, and a different amount of
+        // "ahead" on each clip. At a matching rate the ratio is exactly 1 and the
+        // rounding has nothing to lose.
+        const auto exactSourceFrames = numDestFrames * ratio + sourceFrameCarry;
+        const int numSourceFramesToRead = std::max (1, static_cast<int> (std::lround (exactSourceFrames)));
+        sourceFrameCarry = exactSourceFrames - numSourceFramesToRead;
 
         if (std::exchange (hasBeenReset, false))
         {
+            // The priming block below deliberately reads a different amount (it pulls
+            // the interpolator's latency in and throws the output away), so its
+            // leftover fraction describes nothing worth carrying.
+            sourceFrameCarry = 0.0;
+
             constexpr auto baseLatencyNumSamples = static_cast<FrameCount> (juce::LagrangeInterpolator::getBaseLatency());
             timeSourceIsAheadDueToLatency = TimeDuration::fromSamples (baseLatencyNumSamples, destSampleRate);
             const auto modifiedNumSourceFramesToRead = numSourceFramesToRead + static_cast<int> (baseLatencyNumSamples);
@@ -351,6 +380,8 @@ public:
     const double sourceSampleRate { source->getSampleRate() };
     const double sampleRatio { sourceSampleRate / destSampleRate  };
     double speedRatio = 1.0;
+    // The fraction of a source frame the last readSamples call could not take.
+    double sourceFrameCarry = 0.0;
     std::vector<juce::LagrangeInterpolator> resamplers;
     float gains[2] = { 1.0f, 1.0f };
     TimeDuration timeSourceIsAheadDueToLatency;
